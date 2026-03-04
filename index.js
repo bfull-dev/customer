@@ -617,8 +617,9 @@ const sendMessage = async (params) => {
   // });
 
   // Discord 通知（添付ファイルがあれば一緒に送信）
+  const kintoneRecordUrl = `https://${process.env.KINTONE_DOMAIN}/k/${KINTONE_APP_ID}/show#record=${recordId}`;
   await notifyDiscord(
-    `📩 お客様からメッセージが届きました\n管理番号: ${管理番号}\n本文:\n${message}`,
+    `📩 お客様からメッセージが届きました\n管理番号: ${管理番号}\n本文:\n${message}\n🔗 ${kintoneRecordUrl}`,
     files
   );
 
