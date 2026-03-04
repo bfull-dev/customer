@@ -10,8 +10,20 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+// Kintone カスタマイズJS（staff panel）は Content-Type: text/plain で JSON を送信するため対応
+app.use(express.text({ type: 'text/plain', limit: '50mb' }));
 
 const PORT = process.env.PORT || 3000;
+
+// ─── 日時ヘルパー ─────────────────────────────────────────────────────────────
+
+/** JST現在日時を ISO 8601 形式で返す（例: 2025-01-01T12:00:00+09:00） */
+const nowJST = () => {
+  const now = new Date();
+  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${jst.getUTCFullYear()}-${pad(jst.getUTCMonth() + 1)}-${pad(jst.getUTCDate())}T${pad(jst.getUTCHours())}:${pad(jst.getUTCMinutes())}:${pad(jst.getUTCSeconds())}+09:00`;
+};
 
 // ─── Kintone API ─────────────────────────────────────────────────────────────
 
@@ -144,7 +156,7 @@ const sendRelationMail = async ({ mailboxId, mailAccountId, to, subject, body })
     const res = await axios.post(
       `${RELATION_BASE}/${mailboxId}/mails`,
       {
-        status_cd: 'open',
+        status_cd: 'ongoing',
         mail_account_id: Number(mailAccountId),
         to,
         subject,
@@ -531,32 +543,49 @@ const getRecordForStaff = async (params) => {
   const { recordId } = params;
   const rec = await getRecord(recordId);
 
-  const progressHistory = rec['進捗履歴'].value || [];
-  const 最新進捗 =
-    progressHistory.length > 0
-      ? progressHistory[progressHistory.length - 1].value['進捗内容'].value
-      : '';
+  // 進捗履歴の最新行（日時 + 内容）
+  const progressHistory = rec['進捗履歴']?.value || [];
+  let 最新進捗 = '';
+  if (progressHistory.length > 0) {
+    const last = progressHistory[progressHistory.length - 1].value;
+    const dt  = last['進捗記載日時']?.value ? last['進捗記載日時'].value.replace('T', ' ').slice(0, 16) : '';
+    const txt = last['進捗内容']?.value || '';
+    最新進捗 = dt ? `${dt}　${txt}` : txt;
+  }
 
-  const messageHistory = rec['メッセージ履歴'].value || [];
-  const lastMsg = messageHistory.length > 0 ? messageHistory[messageHistory.length - 1] : null;
-  const 直近メッセージ = lastMsg
-    ? {
-        送信者区分: lastMsg.value['送信者区分'].value,
-        メッセージ本文: lastMsg.value['メッセージ本文'].value,
-        送信日時: lastMsg.value['送信日時'].value,
-      }
-    : null;
+  // メッセージ履歴の最新行（送信者 + 本文80文字）
+  const messageHistory = rec['メッセージ履歴']?.value || [];
+  let 直近メッセージ = '';
+  if (messageHistory.length > 0) {
+    const lastMsg = messageHistory[messageHistory.length - 1].value;
+    const sender  = lastMsg['送信者区分']?.value || '';
+    const text    = lastMsg['メッセージ本文']?.value || '';
+    直近メッセージ = `（${sender}）${text.substring(0, 80)}`;
+  }
 
-  const progressNoteOptions = (process.env.STATUS_OPTIONS || '').split(',').filter(Boolean);
+  // 担当者共有ファイル（FILEフィールド）
+  const fileVal = rec['担当者共有ファイル']?.value;
+  const 共有ファイル = Array.isArray(fileVal) ? fileVal.map((f) => f.name).filter(Boolean) : [];
+
+  // STATUS_OPTIONS をそのまま statusOptions として返す
+  const statusOptions = (process.env.STATUS_OPTIONS || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const progressNoteOptions = statusOptions.length > 0 ? statusOptions : [
+    '受付完了','ご内容確認中','ご返送依頼','検品中','修繕・交換作業中',
+    '発送準備中','発送済み','返金対応','口座情報-確認中','返金手続き中','お振込み','ご対応終了',
+  ];
 
   return {
     ok: true,
     data: {
-      進捗ステータス: rec['進捗ステータス'].value,
+      進捗ステータス:  rec['進捗ステータス']?.value      || '',
       最新進捗,
-      お客様メール: rec['お客様メールアドレス'].value,
+      お客様メール:    rec['お客様メールアドレス']?.value || '',
       直近メッセージ,
-      次回連絡日: rec['次回ご連絡予定日'].value,
+      共有ファイル,
+      次回連絡日:      rec['次回ご連絡予定日']?.value     || '',
+      管理番号:        rec['管理番号']?.value             || '',
+      ブランド:        rec['ブランド']?.value             || '',
+      statusOptions,
       progressNoteOptions,
     },
   };
@@ -582,7 +611,7 @@ const updateProgress = async (params) => {
         id: null,
         value: {
           進捗内容: { value: progressNote },
-          進捗記載日時: { value: new Date().toISOString() },
+          進捗記載日時: { value: nowJST() },
           進捗担当者: { value: '' }, // TODO: 担当者名を渡す場合はリクエストボディに追加してください
         },
       };
@@ -642,10 +671,17 @@ const sendStaffMessage = async (params) => {
         value: {
           送信者区分: { value: '担当者' },
           メッセージ本文: { value: message },
-          送信日時: { value: new Date().toISOString() },
+          送信日時: { value: nowJST() },
           添付ファイル: { value: uploadedFileKeys },
         },
       };
+
+      const brandName = rec['ブランド']?.value || 'Bfull FOTS JAPAN';
+      const { mailboxId, mailAccountId } = getRelationMailbox(brandName);
+      const email = rec['お客様メールアドレス'].value;
+      const 管理番号 = rec['管理番号'].value;
+      const portalUrl = rec['ポータルURL']?.value || '';
+      const status = rec['進捗ステータス']?.value || '';
 
       await axios.put(
         `${KINTONE_BASE}/record.json`,
@@ -655,24 +691,53 @@ const sendStaffMessage = async (params) => {
           revision,
           record: {
             メッセージ履歴: { value: [...existingMessages, newRow] },
+            担当者メッセージ: { value: message }, // ポータル表示用フィールドにも反映
           },
         },
         { headers: kintonePostHeaders }
       );
 
       // Re:Lation でお客様へメール送信
-      const brand = rec['ブランド'].value;
-      const { mailboxId, mailAccountId } = getRelationMailbox(brand);
-      const email = rec['お客様メールアドレス'].value;
-      const 管理番号 = rec['管理番号'].value;
+      const mailBody = [
+        `${brandName} サポート窓口です。`,
+        '',
+        '担当者よりメッセージが届いております。',
+        '以下の内容をご確認ください。',
+        '',
+        '────────────────────────',
+        message,
+        '────────────────────────',
+        '',
+        `　現在のステータス：${status}`,
+        '',
+        'ご不明な点がございましたら、対応状況確認ページより',
+        'メッセージをお送りください。',
+        '',
+        '　▼ お問合せ状況確認ページ',
+        `　${portalUrl}`,
+        '',
+        '────────────────────────',
+        '【対応時間】',
+        '平日 9:00〜18:00',
+        '土日・祝日・夏季休暇・年末年始はメッセージの確認・返信ができません。',
+        '休業日明けに順次ご対応いたします。',
+        '────────────────────────',
+        `${brandName} サポート窓口`,
+      ].join('\n');
 
-      await sendRelationMail({
-        mailboxId,
-        mailAccountId,
-        to: email,
-        subject: `【${管理番号}】担当者よりメッセージが届いています`,
-        body: message,
-      });
+      try {
+        await sendRelationMail({
+          mailboxId,
+          mailAccountId,
+          to: email,
+          subject: `【${brandName}】担当者よりメッセージが届いています（管理番号：${管理番号}）`,
+          body: mailBody,
+        });
+      } catch (mailErr) {
+        // メール送信エラーはログのみ（Kintone更新は成功扱い）
+        console.error('Re:Lation mail error:', String(mailErr));
+        return { ok: true, warning: `Kintone更新成功。メール送信でエラーが発生しました: ${String(mailErr)}` };
+      }
 
       return { ok: true };
     } catch (e) {
@@ -738,7 +803,14 @@ const getStatusOptions = async () => {
 // ─── Router ───────────────────────────────────────────────────────────────────
 
 const router = async (req, res) => {
-  const params = { ...req.query, ...req.body };
+  // Content-Type: text/plain で送られた JSON ボディを解析（Kintone カスタマイズJS対応）
+  let bodyParams = {};
+  if (typeof req.body === 'string') {
+    try { bodyParams = JSON.parse(req.body); } catch (_) {}
+  } else if (req.body && typeof req.body === 'object') {
+    bodyParams = req.body;
+  }
+  const params = { ...req.query, ...bodyParams };
   const action = params.action;
 
   try {
