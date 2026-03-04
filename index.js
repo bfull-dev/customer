@@ -177,9 +177,27 @@ const sendRelationMail = async ({ mailboxId, mailAccountId, to, subject, body })
 
 // ─── Discord Webhook ─────────────────────────────────────────────────────────
 
-const notifyDiscord = async (message) => {
+const notifyDiscord = async (message, files = []) => {
   if (!process.env.DISCORD_WEBHOOK_URL) return;
-  await axios.post(process.env.DISCORD_WEBHOOK_URL, { content: message });
+
+  if (files.length === 0) {
+    // テキストのみ
+    await axios.post(process.env.DISCORD_WEBHOOK_URL, { content: message });
+  } else {
+    // ファイル添付あり → multipart/form-data で送信（複数対応）
+    const form = new FormData();
+    form.append('payload_json', JSON.stringify({ content: message }));
+    files.forEach((file, index) => {
+      const buffer = Buffer.from(file.data, 'base64');
+      form.append(`files[${index}]`, buffer, {
+        filename: file.name,
+        contentType: file.type || 'application/octet-stream',
+      });
+    });
+    await axios.post(process.env.DISCORD_WEBHOOK_URL, form, {
+      headers: form.getHeaders(),
+    });
+  }
 };
 
 // ─── ブランド → Re:Lation マッピング ─────────────────────────────────────────
@@ -499,9 +517,10 @@ const sendMessage = async (params) => {
   //   body: message,
   // });
 
-  // Discord 通知
+  // Discord 通知（添付ファイルがあれば一緒に送信）
   await notifyDiscord(
-    `📩 お客様からメッセージが届きました\n管理番号: ${管理番号}\n本文:\n${message}`
+    `📩 お客様からメッセージが届きました\n管理番号: ${管理番号}\n本文:\n${message}`,
+    files
   );
 
   return { ok: true, uploadedFileNames };
