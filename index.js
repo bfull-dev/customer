@@ -457,6 +457,105 @@ const savePII = async (params) => {
 };
 
 /**
+ * createPortal
+ * App125 から呼び出し：App786 にレコードを作成してポータルURLを発行し案内メールを送信する
+ */
+const createPortal = async (params) => {
+  const {
+    管理番号,
+    ブランド,
+    対応方法,
+    対象商品名,
+    不具合内容,
+    受付日,
+    お客様メールアドレス,
+    氏名,
+  } = params;
+
+  if (!管理番号 || !お客様メールアドレス) {
+    return { ok: false, error: '管理番号とお客様メールアドレスは必須です' };
+  }
+
+  // 重複チェック（同じ管理番号がすでに存在する場合）
+  const existing = await searchRecords(`管理番号 = "${管理番号}" limit 1`);
+  if (existing.length > 0) {
+    const rec = existing[0];
+    return {
+      ok: false,
+      error: 'already_exists',
+      portalUrl: rec['ポータルURL']?.value || '',
+      recordId:  rec['$id']?.value || '',
+    };
+  }
+
+  // アクセストークン・ポータルURL生成
+  const token = crypto.randomUUID();
+  const portalBaseUrl = process.env.PORTAL_BASE_URL || '';
+  const portalUrl = `${portalBaseUrl}?token=${token}`;
+
+  // App786 にレコード作成
+  const res = await axios.post(
+    `${KINTONE_BASE}/record.json`,
+    {
+      app: KINTONE_APP_ID,
+      record: {
+        管理番号:             { value: 管理番号 },
+        ブランド:             { value: ブランド || '' },
+        対応方法:             { value: 対応方法 || '受付中' },
+        対象商品名:           { value: 対象商品名 || '' },
+        不具合内容:           { value: 不具合内容 || '' },
+        受付日:               { value: 受付日 || '' },
+        お客様メールアドレス: { value: お客様メールアドレス },
+        氏名:                 { value: 氏名 || '' },
+        アクセストークン:     { value: token },
+        ポータルURL:          { value: portalUrl },
+        ポータル公開フラグ:   { value: ['公開'] },
+        進捗ステータス:       { value: '受付完了' },
+      },
+    },
+    { headers: kintonePostHeaders }
+  );
+
+  const recordId = String(res.data.id);
+  const brandName = ブランド || 'Bfull FOTS JAPAN';
+  const { mailboxId, mailAccountId } = getRelationMailbox(brandName);
+
+  // Re:Lation でお客様へ案内メール送信
+  try {
+    await sendRelationMail({
+      mailboxId,
+      mailAccountId,
+      to: お客様メールアドレス,
+      subject: `【${brandName}】お問い合わせ対応状況確認ページのご案内`,
+      body: [
+        `${氏名 ? 氏名 + ' 様' : 'お客様'}`,
+        '',
+        `この度は${brandName}をご利用いただき、誠にありがとうございます。`,
+        'お問い合わせ内容の対応状況をご確認いただけるページをご用意いたしました。',
+        '',
+        '▼ 対応状況確認ページ',
+        portalUrl,
+        '',
+        '上記URLよりアクセスいただき、メールアドレス宛に届くワンタイムパスワードでログインしてください。',
+        '',
+        '────────────────────────',
+        '【対応時間】',
+        '平日 9:00〜18:00',
+        '土日・祝日・夏季休暇・年末年始はメッセージの確認・返信ができません。',
+        '休業日明けに順次ご対応いたします。',
+        '────────────────────────',
+        `${brandName} サポート窓口`,
+      ].join('\n'),
+    });
+  } catch (mailErr) {
+    console.error('[createPortal] Re:Lation mail error:', String(mailErr));
+    return { ok: true, portalUrl, recordId, warning: `レコード作成成功。メール送信でエラーが発生しました: ${String(mailErr)}` };
+  }
+
+  return { ok: true, portalUrl, recordId };
+};
+
+/**
  * sendMessage
  * お客様からのメッセージをメッセージ履歴サブテーブルに追記し通知する
  */
@@ -835,6 +934,10 @@ const router = async (req, res) => {
   try {
     let result;
     switch (action) {
+      // App125 連携
+      case 'createPortal':
+        result = await createPortal(params);
+        break;
       // お客様向け
       case 'getPortalData':
         result = await getPortalData(params);
