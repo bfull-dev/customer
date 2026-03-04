@@ -933,6 +933,17 @@ const router = async (req, res) => {
 
   try {
     let result;
+    if (action === 'createPortal') {
+      console.log('[router] createPortal called');
+      console.log('[router] req.method:', req.method);
+      console.log('[router] req.query:', JSON.stringify(req.query));
+      console.log('[router] req.body type:', typeof req.body);
+      console.log('[router] req.body:', JSON.stringify(req.body));
+      console.log('[router] bodyParams:', JSON.stringify(bodyParams));
+      console.log('[router] params keys:', JSON.stringify(Object.keys(params)));
+      console.log('[router] 管理番号:', params['管理番号']);
+      console.log('[router] お客様メールアドレス:', params['お客様メールアドレス']);
+    }
     switch (action) {
       // App125 連携
       case 'createPortal':
