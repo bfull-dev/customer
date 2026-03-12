@@ -143,3 +143,8 @@ Railway の Express サーバーは以下の2オリジンを許可：
 - サブテーブル `id: null` バグ修正（`92c5d6e`）
 - `次回ご連絡予定` の表示位置を CARD2（担当者メッセージ内）→ CARD1（お問合せ内容下）へ移動（`744cb8a`）
 - Cloudflare Pages デプロイ方法確認：git push 非連携、wrangler CLI で手動デプロイ
+
+### 2026-03-12（続）
+- UI修正（`a6ef044`）：タイトル1行化・「管理No.」表示・担当者メッセージを進捗の上へ移動
+- 個人情報告知文追加（`4481a51`）：CARD1 の kintone-note 下に 🔒 案内文を追加
+- ブランド正規化バグ修正（`445f4c6`）：App125 の `B'full` → App786 `Bfull FOTS JAPAN` に変換する `normalizeBrand()` を追加。400エラーを解消
