@@ -310,10 +310,9 @@ footer{margin-top:48px;padding-top:24px;border-top:1px solid var(--border);text-
           <div class="info-key">受付日</div>
           <div class="info-val" id="receptionDate">―</div>
         </div>
-        <div id="nextDateRow" style="display:none;grid-column:1/-1">
-          <div class="info-key">次回ご連絡予定</div>
-          <div class="info-val"><span id="nextDateVal"></span> 頃<span id="nextDateNote"></span></div>
-        </div>
+      </div>
+      <div class="next-date-row" id="nextDateRow" style="display:none">
+        📅 次回ご連絡予定：<span class="next-date-val" id="nextDateVal"></span> 頃<span class="next-date-note" id="nextDateNote"></span>
       </div>
       <div class="kintone-note">ℹ️ 商品名・不具合内容に誤りがある場合はメッセージよりお知らせください。担当者が修正いたします。</div>
     </div>
@@ -617,7 +616,7 @@ function renderPortal(data) {
     document.getElementById('staffMsgText').innerHTML = (data.担当者メッセージ || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
   }
   if (data.次回ご連絡予定日) {
-    document.getElementById('nextDateRow').style.display = 'block';
+    document.getElementById('nextDateRow').style.display = 'flex';
     document.getElementById('nextDateVal').textContent = formatDate(data.次回ご連絡予定日);
     var noteEl = document.getElementById('nextDateNote');
     if (data.次回予定 && data.次回予定.trim()) {
