@@ -7,7 +7,7 @@ const cron = require('node-cron');
 const FormData = require('form-data');
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: process.env.PORTAL_BASE_URL || 'https://bfull-customersupport.pages.dev' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Kintone カスタマイズJS（staff panel）は Content-Type: text/plain で JSON を送信するため対応
@@ -40,13 +40,10 @@ const kintonePostHeaders = {
 
 /** 複数レコード検索 */
 const searchRecords = async (query) => {
-  console.log('[searchRecords] query:', query);
-  console.log('[searchRecords] URL:', `${KINTONE_BASE}/records.json`);
   const res = await axios.get(`${KINTONE_BASE}/records.json`, {
     headers: kintoneGetHeaders,
     params: { app: KINTONE_APP_ID, query },
   });
-  console.log('[searchRecords] response:', JSON.stringify(res.data));
   return res.data.records;
 };
 
@@ -60,11 +57,7 @@ const getRecord = async (recordId) => {
     });
     return res.data.record;
   } catch (error) {
-    console.error('Kintone API Error:', error.response?.data);
-    console.error('Request URL:', error.config?.url);
-    console.error('Request Params:', error.config?.params);
-    console.error('Kintone API Error detail:', JSON.stringify(error.response?.data));
-    console.error('Request headers:', JSON.stringify(error.config?.headers));
+    console.error('Kintone API Error:', error.response?.status, error.response?.data?.message);
     throw error;
   }
 };
@@ -305,6 +298,12 @@ const requestOTP = async (params) => {
   const email = rec['お客様メールアドレス'].value;
   const brand = rec['ブランド'].value;
 
+  // OTP有効期限が残っている間は再発行しない（レート制限）
+  const lastExpiry = rec['OTP有効期限'].value;
+  if (lastExpiry && new Date() < new Date(lastExpiry)) {
+    return { ok: false, error: 'otp_too_soon', message: 'しばらく経ってから再送してください。' };
+  }
+
   const otp = crypto.randomInt(100000, 999999).toString();
   const expiryMinutes = parseInt(process.env.OTP_EXPIRY_MINUTES || '15', 10);
   const expiry = new Date(Date.now() + expiryMinutes * 60 * 1000).toISOString();
@@ -391,6 +390,10 @@ const getPII = async (params) => {
   if (rec['セッションキー'].value !== sessionKey) {
     return { ok: false, error: 'invalid_session' };
   }
+  const sessionExpiry = rec['セッション有効期限'].value;
+  if (!sessionExpiry || new Date() > new Date(sessionExpiry)) {
+    return { ok: false, error: 'session_expired' };
+  }
 
   return {
     ok: true,
@@ -435,6 +438,10 @@ const savePII = async (params) => {
 
   if (rec['セッションキー'].value !== sessionKey) {
     return { ok: false, error: 'invalid_session' };
+  }
+  const sessionExpiry2 = rec['セッション有効期限'].value;
+  if (!sessionExpiry2 || new Date() > new Date(sessionExpiry2)) {
+    return { ok: false, error: 'session_expired' };
   }
 
   const fields = {
@@ -636,6 +643,14 @@ const downloadMessageFile = async (params) => {
   const records = await searchRecords(`アクセストークン = "${token}" limit 1`);
   if (!records.length) return { ok: false, error: 'invalid_token' };
 
+  const rec = records[0];
+  const allFileKeys = (rec['メッセージ履歴'].value || []).flatMap((row) =>
+    (row.value['添付ファイル']?.value || []).map((f) => f.fileKey)
+  );
+  if (!allFileKeys.includes(fileKey)) {
+    return { ok: false, error: 'file_not_found' };
+  }
+
   const res = await axios.get(`${KINTONE_BASE}/file.json`, {
     headers: kintoneGetHeaders,
     params: { fileKey },
@@ -772,17 +787,18 @@ const updateProgress = async (params) => {
 const sendStaffMessage = async (params) => {
   const { recordId, message, files = [] } = params;
 
+  // ファイルアップロードはリトライ外で1度だけ実行（重複アップロード防止）
+  const uploadedFileKeys = await Promise.all(
+    files.map(async (file) => {
+      const fileKey = await uploadFile(file.name, file.type, file.data);
+      return { fileKey };
+    })
+  );
+
   for (let i = 0; i < 3; i++) {
     try {
       const rec = await getRecord(recordId);
       const revision = rec['$revision'].value;
-
-      // ファイルアップロード
-      const uploadedFileKeys = [];
-      for (const file of files) {
-        const fileKey = await uploadFile(file.name, file.type, file.data);
-        uploadedFileKeys.push({ fileKey });
-      }
 
       // メッセージ履歴サブテーブルに追記
       const existingMessages = rec['メッセージ履歴'].value || [];
@@ -876,39 +892,14 @@ const sendStaffMessage = async (params) => {
  */
 const setNextContactDate = async (params) => {
   const { recordId, date, note } = params;
-
-  for (let i = 0; i < 3; i++) {
-    try {
-      const rec = await getRecord(recordId);
-      const revision = rec['$revision'].value;
-
-      const fields = {
-        次回ご連絡予定日: { value: date },
-      };
-      if (note !== undefined) {
-        fields['次回予定'] = { value: note };
-      }
-
-      await axios.put(
-        `${KINTONE_BASE}/record.json`,
-        {
-          app: KINTONE_APP_ID,
-          id: recordId,
-          revision,
-          record: fields,
-        },
-        { headers: kintonePostHeaders }
-      );
-
-      return { ok: true };
-    } catch (e) {
-      if (e.response?.status === 409 && i < 2) {
-        await new Promise((r) => setTimeout(r, 500));
-        continue;
-      }
-      throw e;
-    }
+  const fields = {
+    次回ご連絡予定日: { value: date },
+  };
+  if (note !== undefined) {
+    fields['次回予定'] = { value: note };
   }
+  await updateRecord(recordId, fields); // revision=-1 でリビジョンチェックをスキップ
+  return { ok: true };
 };
 
 /**
@@ -965,22 +956,23 @@ const router = async (req, res) => {
       case 'downloadMessageFile':
         result = await downloadMessageFile(params);
         break;
-      // 担当者向け
+      // 担当者向け（STAFF_SECRET による認証）
       case 'getRecordForStaff':
-        result = await getRecordForStaff(params);
-        break;
       case 'updateProgress':
-        result = await updateProgress(params);
-        break;
       case 'sendStaffMessage':
-        result = await sendStaffMessage(params);
-        break;
       case 'setNextContactDate':
-        result = await setNextContactDate(params);
+      case 'getStatusOptions': {
+        if (process.env.STAFF_SECRET && params.staffSecret !== process.env.STAFF_SECRET) {
+          result = { ok: false, error: 'unauthorized' };
+          break;
+        }
+        if (action === 'getRecordForStaff') result = await getRecordForStaff(params);
+        else if (action === 'updateProgress') result = await updateProgress(params);
+        else if (action === 'sendStaffMessage') result = await sendStaffMessage(params);
+        else if (action === 'setNextContactDate') result = await setNextContactDate(params);
+        else result = await getStatusOptions();
         break;
-      case 'getStatusOptions':
-        result = await getStatusOptions();
-        break;
+      }
       default:
         result = { ok: false, error: 'unknown_action' };
     }
@@ -1001,6 +993,12 @@ app.post('/', router);
  * UPDATE_STATUS イベントで「対応完了」になった場合に1ヶ月後12:00をアクセス制限日時に設定
  */
 app.post('/webhook/kintone', async (req, res) => {
+  if (process.env.WEBHOOK_SECRET) {
+    const provided = req.headers['x-webhook-secret'];
+    if (!provided || provided !== process.env.WEBHOOK_SECRET) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+  }
   try {
     const { type, record } = req.body;
 
@@ -1052,12 +1050,15 @@ cron.schedule('0 * * * *', async () => {
       return;
     }
 
-    for (const rec of records) {
-      const recordId = rec['$id'].value;
-      await updateRecord(recordId, {
-        ポータル公開フラグ: { value: [] }, // チェックボックスをすべて外す
-      });
-    }
+    const updateData = records.map((rec) => ({
+      id: rec['$id'].value,
+      record: { ポータル公開フラグ: { value: [] } },
+    }));
+    await axios.put(
+      `${KINTONE_BASE}/records.json`,
+      { app: KINTONE_APP_ID, records: updateData },
+      { headers: kintonePostHeaders }
+    );
 
     console.log(`[cron] アクセス制限処理完了: ${records.length}件のポータルを非公開にしました`);
   } catch (e) {
@@ -1069,8 +1070,6 @@ cron.schedule('0 * * * *', async () => {
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log('Token length:', process.env.KINTONE_API_TOKEN?.length);
-  console.log('Token first 10 chars:', process.env.KINTONE_API_TOKEN?.substring(0, 10));
   console.log(`Kintone App: ${process.env.KINTONE_DOMAIN} / App${KINTONE_APP_ID}`);
   console.log(`Re:Lation: ${process.env.RELATION_SUBDOMAIN}.relationapp.jp`);
 });
