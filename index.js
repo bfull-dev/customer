@@ -7,7 +7,17 @@ const cron = require('node-cron');
 const FormData = require('form-data');
 
 const app = express();
-app.use(cors({ origin: process.env.PORTAL_BASE_URL || 'https://bfull-customersupport.pages.dev' }));
+const allowedOrigins = [
+  process.env.PORTAL_BASE_URL || 'https://bfull-customersupport.pages.dev',
+  process.env.KINTONE_ORIGIN  || 'https://exk1223hafrf.cybozu.com',
+];
+app.use(cors({
+  origin: (origin, cb) => {
+    // オリジンなし（curl等）または許可リストに含まれる場合は許可
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    cb(new Error('CORS: origin not allowed: ' + origin));
+  },
+}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Kintone カスタマイズJS（staff panel）は Content-Type: text/plain で JSON を送信するため対応
