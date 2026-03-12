@@ -1040,9 +1040,10 @@ cron.schedule('0 * * * *', async () => {
   try {
     const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 
-    // アクセス制限日時 <= 現在 かつ まだ公開中のレコードを取得
+    // アクセス制限日時が設定済み かつ 期限切れ かつ まだ公開中のレコードを取得
+    // ※ アクセス制限日時が空のレコードは除外（空値は kintone で最古日時扱いとなるため誤検知防止）
     const records = await searchRecords(
-      `アクセス制限日時 <= "${now}" and ポータル公開フラグ in ("公開") limit 100`
+      `アクセス制限日時 != "" and アクセス制限日時 <= "${now}" and ポータル公開フラグ in ("公開") limit 100`
     );
 
     if (!records.length) {
