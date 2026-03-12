@@ -203,6 +203,16 @@ const notifyDiscord = async (message, files = []) => {
   }
 };
 
+// ─── ブランド名正規化（App125→App786）──────────────────────────────────────
+// App125 の「B'full」「bfull」等の表記 → App786 DROP_DOWN の「Bfull FOTS JAPAN」に統一
+
+const normalizeBrand = (raw) => {
+  const v = (raw || '').trim();
+  if (v === 'インサイト') return 'インサイト';
+  // "B'full" / "Bfull" / "bfull" 等はすべて Bfull FOTS JAPAN へ
+  return 'Bfull FOTS JAPAN';
+};
+
 // ─── ブランド → Re:Lation マッピング ─────────────────────────────────────────
 
 const getRelationMailbox = (brand) => {
@@ -493,6 +503,10 @@ const createPortal = async (params) => {
     return { ok: false, error: '管理番号とお客様メールアドレスは必須です' };
   }
 
+  // App125 のブランド名を App786 DROP_DOWN の選択肢に正規化
+  // 例: "B'full" → "Bfull FOTS JAPAN"
+  const normalizedBrand = normalizeBrand(ブランド);
+
   // 重複チェック（同じ管理番号がすでに存在する場合）
   const existing = await searchRecords(`管理番号 = "${管理番号}" limit 1`);
   if (existing.length > 0) {
@@ -517,7 +531,7 @@ const createPortal = async (params) => {
       app: KINTONE_APP_ID,
       record: {
         管理番号:             { value: 管理番号 },
-        ブランド:             { value: ブランド || '' },
+        ブランド:             { value: normalizedBrand },
         対応方法:             { value: 対応方法 || '受付中' },
         対象商品名:           { value: 対象商品名 || '' },
         不具合内容:           { value: 不具合内容 || '' },
@@ -534,7 +548,7 @@ const createPortal = async (params) => {
   );
 
   const recordId = String(res.data.id);
-  const brandName = ブランド || 'Bfull FOTS JAPAN';
+  const brandName = normalizedBrand;
   const { mailboxId, mailAccountId } = getRelationMailbox(brandName);
 
   // Re:Lation でお客様へ案内メール送信
