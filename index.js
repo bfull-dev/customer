@@ -753,11 +753,10 @@ const updateProgress = async (params) => {
       const existingProgress = rec['進捗履歴'].value || [];
 
       const newRow = {
-        id: null,
         value: {
           進捗内容: { value: progressNote },
           進捗記載日時: { value: nowJST() },
-          進捗担当者: { value: '' }, // TODO: 担当者名を渡す場合はリクエストボディに追加してください
+          進捗担当者: { value: '' },
         },
       };
 
