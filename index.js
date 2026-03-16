@@ -679,6 +679,7 @@ const sendMessage = async (params) => {
       revision,
       record: {
         メッセージ履歴: { value: [...existingMessages, newRow] },
+        最終送信者区分: { value: 'お客様' },
       },
     },
     { headers: kintonePostHeaders }
@@ -900,6 +901,7 @@ const sendStaffMessage = async (params) => {
           record: {
             メッセージ履歴: { value: [...existingMessages, newRow] },
             担当者メッセージ: { value: message }, // ポータル表示用フィールドにも反映
+            最終送信者区分: { value: '担当者' },
           },
         },
         { headers: kintonePostHeaders }
