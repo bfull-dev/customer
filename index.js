@@ -432,6 +432,45 @@ const getPII = async (params) => {
 };
 
 /**
+ * App786に入力された個人情報をApp619の対応レコードへ同期する
+ * @param {string} kanriNumber - 管理番号（両アプリの紐付けキー）
+ * @param {{ 氏名: string, 電話番号: string, 郵便番号: string, 住所: string }} personalInfo
+ */
+const syncPersonalInfoTo619 = async (kanriNumber, personalInfo) => {
+  const domain = process.env.KINTONE_DOMAIN;
+  const apiToken = process.env.KINTONE_APP619_TOKEN;
+  const APP_ID = 619;
+
+  const query = encodeURIComponent(`管理番号 = "${kanriNumber}" limit 1`);
+  const searchRes = await axios.get(
+    `https://${domain}/k/v1/records.json?app=${APP_ID}&query=${query}&fields[0]=$id`,
+    { headers: { 'X-Cybozu-API-Token': apiToken } }
+  );
+  const records = searchRes.data.records;
+  if (!records || records.length === 0) {
+    console.warn(`[619sync] App619に管理番号「${kanriNumber}」のレコードが見つかりませんでした`);
+    return;
+  }
+  const recordId = records[0].$id.value;
+
+  await axios.put(
+    `https://${domain}/k/v1/record.json`,
+    {
+      app: APP_ID,
+      id: recordId,
+      record: {
+        氏名:     { value: personalInfo.氏名 },
+        電話番号:  { value: personalInfo.電話番号 },
+        郵便番号:  { value: personalInfo.郵便番号 },
+        住所:     { value: personalInfo.住所 },
+      },
+    },
+    { headers: { 'X-Cybozu-API-Token': apiToken, 'Content-Type': 'application/json' } }
+  );
+  console.log(`[619sync] App619 レコードID:${recordId} の個人情報を更新しました`);
+};
+
+/**
  * savePII
  * 個人情報を保存してセッションをクリアする
  */
@@ -479,7 +518,17 @@ const savePII = async (params) => {
   if (口座番号 !== undefined) fields['口座番号'] = { value: 口座番号 };
   if (口座名義 !== undefined) fields['口座名義'] = { value: 口座名義 };
 
+  const kanriNumber = rec['管理番号'].value;
   await updateRecord(recordId, fields);
+
+  // ========== App619へ個人情報を同期 ==========
+  try {
+    await syncPersonalInfoTo619(kanriNumber, { 氏名, 電話番号, 郵便番号, 住所 });
+  } catch (err) {
+    // 619の更新失敗はログのみ。お客様へのレスポンスはブロックしない
+    console.error('[619sync] 予期せぬエラー:', err);
+  }
+
   return { ok: true };
 };
 
