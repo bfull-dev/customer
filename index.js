@@ -1103,10 +1103,10 @@ const arrivedNotifiedIds = new Set();
 setInterval(() => arrivedNotifiedIds.clear(), 24 * 60 * 60 * 1000);
 
 app.post('/webhook/kintone-619', async (req, res) => {
-  // トークン認証
+  // URL クエリパラメータ認証 (?k=シークレット)
+  // kintone Webhook にはトークン欄がないため URL に埋め込む方式を採用
   if (process.env.WEBHOOK_619_SECRET) {
-    const token = req.headers['x-cybozu-webhook-token'] || req.headers['x-webhook-secret'];
-    if (!token || token !== process.env.WEBHOOK_619_SECRET) {
+    if (req.query.k !== process.env.WEBHOOK_619_SECRET) {
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
   }
