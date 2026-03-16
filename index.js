@@ -1189,6 +1189,7 @@ cron.schedule('*/30 * * * *', async () => {
     for (const record of records) {
       try {
         await sendArrivesNotification(record);
+        await new Promise(r => setTimeout(r, 1500)); // Discord レート制限対策（1.5秒待機）
       } catch (e) {
         console.error(`[619cron] 通知失敗 recordId:${record['$id']?.value}`, e.message);
       }
