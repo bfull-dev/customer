@@ -1086,6 +1086,84 @@ app.post('/api/send-shipping-mail-619', async (req, res) => {
   }
 });
 
+// ─── ③-b App619 お客様返送状況「着荷」Discord通知 ─────────────────────────────
+
+/**
+ * POST /webhook/kintone-619
+ * App619 の EDIT_RECORD イベントを受け取り、
+ * お客様返送状況 = 着荷 になったら中村さん宛 Discord チャンネルへ通知する。
+ *
+ * 環境変数:
+ *   DISCORD_619_ARRIVES_WEBHOOK — 専用 Discord チャンネルの Webhook URL
+ *   WEBHOOK_619_SECRET          — kintone Webhook トークン（任意）
+ */
+
+// 同一レコードへの重複通知を防ぐ（24 時間キャッシュ）
+const arrivedNotifiedIds = new Set();
+setInterval(() => arrivedNotifiedIds.clear(), 24 * 60 * 60 * 1000);
+
+app.post('/webhook/kintone-619', async (req, res) => {
+  // トークン認証
+  if (process.env.WEBHOOK_619_SECRET) {
+    const token = req.headers['x-cybozu-webhook-token'] || req.headers['x-webhook-secret'];
+    if (!token || token !== process.env.WEBHOOK_619_SECRET) {
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+  }
+
+  try {
+    const { type, record } = req.body;
+
+    // EDIT_RECORD 以外は無視
+    if (type !== 'EDIT_RECORD') return res.json({ ok: true, skipped: `type=${type}` });
+    if (!record) return res.json({ ok: true, skipped: 'no record' });
+
+    // お客様返送状況の値を取得（CHECK_BOX=配列 / DROP_DOWN・RADIO=文字列 両対応）
+    const raw = record['お客様返送状況']?.value ?? '';
+    const statusVal = Array.isArray(raw) ? raw.join('') : String(raw);
+
+    if (statusVal !== '着荷') {
+      return res.json({ ok: true, skipped: `status=${statusVal}` });
+    }
+
+    // 重複通知チェック
+    const recordId = String(record['$id']?.value ?? '');
+    if (arrivedNotifiedIds.has(recordId)) {
+      return res.json({ ok: true, skipped: 'already_notified' });
+    }
+    arrivedNotifiedIds.add(recordId);
+
+    // Discord メッセージ組み立て
+    const kanriNo  = record['管理番号']?.value  || '（未設定）';
+    const name     = record['氏名']?.value      || '（未設定）';
+    const product  = record['商品名']?.value    || '（未設定）';
+    const domain   = process.env.KINTONE_DOMAIN;
+    const recUrl   = `https://${domain}/k/619/show#record=${recordId}`;
+
+    const message =
+      '🏭 **不具合品が千秋工場へ到着しました**\n' +
+      'お客様へ不具合品荷受けのご連絡をしてください。\n\n' +
+      `📋 管理番号：${kanriNo}\n` +
+      `👤 お客様名：${name}\n` +
+      `📦 商品名：${product}\n` +
+      `🔗 ${recUrl}`;
+
+    const webhookUrl = process.env.DISCORD_619_ARRIVES_WEBHOOK;
+    if (!webhookUrl) {
+      console.warn('[619arrives] DISCORD_619_ARRIVES_WEBHOOK が未設定です');
+      return res.json({ ok: true, warning: 'Discord webhook URL not configured' });
+    }
+
+    await axios.post(webhookUrl, { content: message });
+    console.log(`[619arrives] Discord通知完了 管理番号:${kanriNo} recordId:${recordId}`);
+    res.json({ ok: true });
+
+  } catch (e) {
+    console.error('[619arrives] Error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ─── ③ Webhook: Kintone ──────────────────────────────────────────────────────
 
 /**
