@@ -1058,6 +1058,34 @@ const router = async (req, res) => {
 app.get('/', router);
 app.post('/', router);
 
+// ─── ③-a App619 配送メール送信 ───────────────────────────────────────────────
+
+/**
+ * POST /api/send-shipping-mail-619
+ * App619 Kintone JS から呼び出し。配送完了メールを Re:Lation 経由で送信する。
+ */
+app.post('/api/send-shipping-mail-619', async (req, res) => {
+  const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+  const { secret, brand, to, subject, mailBody } = body;
+
+  if (!process.env.STAFF_SECRET || secret !== process.env.STAFF_SECRET) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  if (!to || !subject || !mailBody) {
+    return res.status(400).json({ ok: false, error: 'missing_params' });
+  }
+
+  try {
+    const { mailboxId, mailAccountId } = getRelationMailbox(brand || '');
+    await sendRelationMail({ mailboxId, mailAccountId, to, subject, body: mailBody });
+    console.log(`[619mail] 配送メール送信完了 → ${to} (brand: ${brand})`);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[619mail] Error:', e.response?.data || e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ─── ③ Webhook: Kintone ──────────────────────────────────────────────────────
 
 /**
