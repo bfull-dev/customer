@@ -1118,8 +1118,8 @@ app.post('/webhook/kintone-619', async (req, res) => {
     if (type !== 'EDIT_RECORD') return res.json({ ok: true, skipped: `type=${type}` });
     if (!record) return res.json({ ok: true, skipped: 'no record' });
 
-    // お客様返送状況の値を取得（CHECK_BOX=配列 / DROP_DOWN・RADIO=文字列 両対応）
-    const raw = record['お客様返送状況']?.value ?? '';
+    // 返送状況の値を取得（フィールドコード: 返送状況 / RADIO_BUTTON型 / 選択肢: 未着・着荷）
+    const raw = record['返送状況']?.value ?? '';
     const statusVal = Array.isArray(raw) ? raw.join('') : String(raw);
 
     if (statusVal !== '着荷') {
