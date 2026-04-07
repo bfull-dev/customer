@@ -110,13 +110,13 @@ const updateRecord = async (recordId, fields, revision = -1, retries = 3) => {
 };
 
 /** Kintone Files API にファイルをアップロードして fileKey を返す */
-const uploadFile = async (name, type, base64data) => {
+const uploadFile = async (name, type, base64data, token = process.env.KINTONE_API_TOKEN) => {
   const buffer = Buffer.from(base64data, 'base64');
   const form = new FormData();
   form.append('file', buffer, { filename: name, contentType: type });
   const res = await axios.post(`${KINTONE_BASE}/file.json`, form, {
     headers: {
-      'X-Cybozu-API-Token': process.env.KINTONE_API_TOKEN,
+      'X-Cybozu-API-Token': token,
       ...form.getHeaders(), // multipart/form-data; boundary=...
     },
   });
@@ -660,12 +660,17 @@ const sendMessage = async (params) => {
   const 管理番号 = rec['管理番号'].value;
 
   // ファイルアップロード
-  const uploadedFileKeys = [];
+  const uploadedFileKeys = [];     // App786 用
+  const uploadedFileKeys125 = [];  // App125 用（別トークンで再アップロード）
   const uploadedFileNames = [];
   for (const file of files) {
     const fileKey = await uploadFile(file.name, file.type, file.data);
     uploadedFileKeys.push({ fileKey });
     uploadedFileNames.push(file.name);
+    if (process.env.KINTONE_APP_125_TOKEN) {
+      const fileKey125 = await uploadFile(file.name, file.type, file.data, process.env.KINTONE_APP_125_TOKEN);
+      uploadedFileKeys125.push({ fileKey: fileKey125 });
+    }
   }
 
   // メッセージ履歴サブテーブルに追記（既存 + 新規行）
@@ -695,7 +700,7 @@ const sendMessage = async (params) => {
   );
 
   // App125 の「不具合画像」フィールドに同じファイルを追記
-  if (uploadedFileKeys.length > 0) {
+  if (uploadedFileKeys125.length > 0) {
     try {
       const app125Res = await axios.get(`${KINTONE_BASE}/records.json`, {
         headers: kintone125GetHeaders,
@@ -710,7 +715,7 @@ const sendMessage = async (params) => {
           id: app125Rec['$id'].value,
           revision: app125Rec['$revision'].value,
           record: {
-            不具合画像: { value: [...existingImages, ...uploadedFileKeys] },
+            不具合画像: { value: [...existingImages, ...uploadedFileKeys125] },
           },
         }, { headers: kintone125PostHeaders });
       }
