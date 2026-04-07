@@ -685,6 +685,12 @@ const sendMessage = async (params) => {
     },
   };
 
+  // 最新の非空メッセージ本文を後ろから探す（添付のみ行をスキップ）
+  const allMessages = [...existingMessages, newRow];
+  const latestMessage = [...allMessages].reverse()
+    .find((row) => row.value['メッセージ本文']?.value)
+    ?.value['メッセージ本文'].value || '';
+
   await axios.put(
     `${KINTONE_BASE}/record.json`,
     {
@@ -694,6 +700,7 @@ const sendMessage = async (params) => {
       record: {
         メッセージ履歴: { value: [...existingMessages, newRow] },
         最終送信者区分: { value: 'お客様' },
+        最新メッセージ: { value: latestMessage },
       },
     },
     { headers: kintonePostHeaders }
@@ -924,6 +931,12 @@ const sendStaffMessage = async (params) => {
         },
       };
 
+      // 最新の非空メッセージ本文を後ろから探す（添付のみ行をスキップ）
+      const allMessages = [...existingMessages, newRow];
+      const latestMessage = [...allMessages].reverse()
+        .find((row) => row.value['メッセージ本文']?.value)
+        ?.value['メッセージ本文'].value || '';
+
       const brandName = rec['ブランド']?.value || 'Bfull FOTS JAPAN';
       const { mailboxId, mailAccountId } = getRelationMailbox(brandName);
       const email = rec['お客様メールアドレス'].value;
@@ -941,6 +954,7 @@ const sendStaffMessage = async (params) => {
             メッセージ履歴: { value: [...existingMessages, newRow] },
             担当者メッセージ: { value: message }, // ポータル表示用フィールドにも反映
             最終送信者区分: { value: '担当者' },
+            最新メッセージ: { value: latestMessage },
           },
         },
         { headers: kintonePostHeaders }
