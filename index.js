@@ -48,6 +48,15 @@ const kintonePostHeaders = {
   'Content-Type': 'application/json',
 };
 
+// ─── App 125 用ヘッダー ────────────────────────────────────────────────────────
+const kintone125GetHeaders = {
+  'X-Cybozu-API-Token': process.env.KINTONE_APP_125_TOKEN,
+};
+const kintone125PostHeaders = {
+  'X-Cybozu-API-Token': process.env.KINTONE_APP_125_TOKEN,
+  'Content-Type': 'application/json',
+};
+
 /** 複数レコード検索 */
 const searchRecords = async (query) => {
   const res = await axios.get(`${KINTONE_BASE}/records.json`, {
@@ -684,6 +693,31 @@ const sendMessage = async (params) => {
     },
     { headers: kintonePostHeaders }
   );
+
+  // App125 の「不具合画像」フィールドに同じファイルを追記
+  if (uploadedFileKeys.length > 0) {
+    try {
+      const app125Res = await axios.get(`${KINTONE_BASE}/records.json`, {
+        headers: kintone125GetHeaders,
+        params: { app: 125, query: `管理番号 = "${管理番号}" limit 1` },
+      });
+      const app125Records = app125Res.data.records;
+      if (app125Records.length > 0) {
+        const app125Rec = app125Records[0];
+        const existingImages = app125Rec['不具合画像'].value || [];
+        await axios.put(`${KINTONE_BASE}/record.json`, {
+          app: 125,
+          id: app125Rec['$id'].value,
+          revision: app125Rec['$revision'].value,
+          record: {
+            不具合画像: { value: [...existingImages, ...uploadedFileKeys] },
+          },
+        }, { headers: kintone125PostHeaders });
+      }
+    } catch (e) {
+      console.error('App125 不具合画像 更新エラー:', e.response?.data || e.message);
+    }
+  }
 
   // TODO: Re:Lation API でお客様→担当者への通知メール送信
   // 担当者の通知先メールアドレスの取得方法を確認してください。
