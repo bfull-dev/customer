@@ -192,24 +192,31 @@ const sendRelationMail = async ({ mailboxId, mailAccountId, to, subject, body })
 const notifyDiscord = async (message, files = []) => {
   if (!process.env.DISCORD_WEBHOOK_URL) return;
 
-  if (files.length === 0) {
-    // テキストのみ
-    await axios.post(process.env.DISCORD_WEBHOOK_URL, { content: message });
-  } else {
-    // ファイル添付あり → multipart/form-data で送信（複数対応）
-    const form = new FormData();
-    form.append('payload_json', JSON.stringify({ content: message }));
-    files.forEach((file, index) => {
-      const buffer = Buffer.from(file.data, 'base64');
-      form.append(`files[${index}]`, buffer, {
-        filename: file.name,
-        contentType: file.type || 'application/octet-stream',
-      });
-    });
-    await axios.post(process.env.DISCORD_WEBHOOK_URL, form, {
-      headers: form.getHeaders(),
-    });
+  // base64 → バイト数換算で合計サイズを確認（Discord Webhook 上限 8MB）
+  const totalBytes = files.reduce((sum, f) => sum + Math.ceil((f.data?.length || 0) * 3 / 4), 0);
+  const MAX_BYTES = 7 * 1024 * 1024; // 7MB（安全マージン）
+
+  if (files.length === 0 || totalBytes > MAX_BYTES) {
+    const sizeNote = totalBytes > MAX_BYTES
+      ? `\n📎 添付ファイル（サイズ超過のため省略）: ${files.map((f) => f.name).join(', ')}`
+      : '';
+    await axios.post(process.env.DISCORD_WEBHOOK_URL, { content: message + sizeNote });
+    return;
   }
+
+  // ファイル添付あり → multipart/form-data で送信（複数対応）
+  const form = new FormData();
+  form.append('payload_json', JSON.stringify({ content: message }));
+  files.forEach((file, index) => {
+    const buffer = Buffer.from(file.data, 'base64');
+    form.append(`files[${index}]`, buffer, {
+      filename: file.name,
+      contentType: file.type || 'application/octet-stream',
+    });
+  });
+  await axios.post(process.env.DISCORD_WEBHOOK_URL, form, {
+    headers: form.getHeaders(),
+  });
 };
 
 // ─── ブランド名正規化（App125→App786）──────────────────────────────────────
@@ -746,10 +753,14 @@ const sendMessage = async (params) => {
 
   // Discord 通知（添付ファイルがあれば一緒に送信）
   const kintoneRecordUrl = `https://${process.env.KINTONE_DOMAIN}/k/${KINTONE_APP_ID}/show#record=${recordId}`;
-  await notifyDiscord(
-    `📩 お客様からメッセージが届きました\n管理番号: ${管理番号}\n本文:\n${message}\n🔗 ${kintoneRecordUrl}`,
-    files
-  );
+  try {
+    await notifyDiscord(
+      `📩 お客様からメッセージが届きました\n管理番号: ${管理番号}\n本文:\n${message}\n🔗 ${kintoneRecordUrl}`,
+      files
+    );
+  } catch (discordErr) {
+    console.error('[sendMessage] Discord通知エラー:', discordErr.message);
+  }
 
   return { ok: true, uploadedFileNames };
 };
