@@ -738,6 +738,26 @@ const sendMessage = async (params) => {
     }
   }
 
+  // ── ステータスが「対応完了」なら「再問合せ」へ戻す ──
+  const currentStatus = rec['ステータス']?.value;
+  if (currentStatus === '対応完了') {
+    try {
+      await axios.put(
+        `${KINTONE_BASE}/record/status.json`,
+        {
+          app: KINTONE_APP_ID,
+          id: recordId,
+          action: 'リテイク',
+        },
+        { headers: kintonePostHeaders }
+      );
+      console.log(`[sendMessage] ステータスを「再問合せ」に変更しました（recordId: ${recordId}）`);
+    } catch (statusErr) {
+      // ステータス変更の失敗はメッセージ送信をブロックしない
+      console.error('[sendMessage] ステータス変更エラー:', statusErr.response?.data || statusErr.message);
+    }
+  }
+
   // TODO: Re:Lation API でお客様→担当者への通知メール送信
   // 担当者の通知先メールアドレスの取得方法を確認してください。
   // App786 に担当者メールアドレスフィールドがあれば以下のコメントを解除してください:
