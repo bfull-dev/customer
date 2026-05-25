@@ -562,6 +562,7 @@ const createPortal = async (params) => {
     受付日,
     お客様メールアドレス,
     氏名,
+    skipMail,
   } = params;
 
   if (!管理番号 || !お客様メールアドレス) {
@@ -615,6 +616,11 @@ const createPortal = async (params) => {
   const recordId = String(res.data.id);
   const brandName = normalizedBrand;
   const { mailboxId, mailAccountId } = getRelationMailbox(brandName);
+  const shouldSkipMail = skipMail === true || skipMail === 'true' || skipMail === '1';
+
+  if (shouldSkipMail) {
+    return { ok: true, portalUrl, recordId, mailSkipped: true };
+  }
 
   // Re:Lation でお客様へ案内メール送信
   try {
