@@ -1440,6 +1440,35 @@ cron.schedule('0 * * * *', async () => {
   }
 });
 
+// ─── Cron: 毎時5分 自動返信スケジュールの後片付け ─────────────────────────────
+
+/**
+ * 設定レコードの「解除日時_自動返信」を過ぎたら、開始日時/解除日時を空欄に戻す。
+ * ・対象は設定レコード1件のみ。getAutoReplyConfig() を再利用して JS で期限判定する
+ *   （空 DATETIME クエリが全件一致する既知問題を回避するため、クエリ比較は使わない）。
+ * ・自動返信チェックボックスは変更しない（スケジュール由来の日時フィールドのみ掃除）。
+ * ・クリア後は解除日時が空になるため再実行されない（冪等）。
+ */
+cron.schedule('5 * * * *', async () => {
+  try {
+    const config = await getAutoReplyConfig();
+    if (!config) return;
+
+    const end = config['解除日時_自動返信']?.value;
+    if (!end) return;                        // 解除日時 未設定なら何もしない
+    if (new Date() <= new Date(end)) return; // まだ期限内
+
+    const configId = config['$id'].value;
+    await updateRecord(configId, {
+      開始日時_自動返信: { value: '' },
+      解除日時_自動返信: { value: '' },
+    });
+    console.log(`[autoReplyCleanup] 設定レコード(${configId})の開始日時/解除日時を空欄化しました（解除日時: ${end}）`);
+  } catch (e) {
+    console.error('[autoReplyCleanup] Error:', e.stack || e.message);
+  }
+});
+
 // ─── サーバー起動 ─────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
