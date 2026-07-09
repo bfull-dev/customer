@@ -245,6 +245,28 @@ const getRelationMailbox = (brand) => {
   };
 };
 
+// ─── 休業日 自動返信 ─────────────────────────────────────────────────────────
+// グローバル設定を1件の「設定レコード」で管理する（管理番号 = AUTO_REPLY_CONFIG）。
+// 3時間の重複防止タイマーは各お客様レコードの「最終通知送信日時」で管理する。
+
+/** 自動返信の設定レコードを1件取得（無ければ null） */
+const getAutoReplyConfig = async () => {
+  const key = process.env.AUTO_REPLY_CONFIG_KANRI || 'AUTO_REPLY_CONFIG';
+  const recs = await searchRecords(`管理番号 = "${key}" limit 1`);
+  return recs.length ? recs[0] : null;
+};
+
+/** 休業自動返信が有効か（手動チェックON、または 開始日時≦現在≦解除日時）を判定 */
+const isAutoReplyActive = (config, now = new Date()) => {
+  if (!config) return false;
+  const on = (config['自動返信']?.value || []).includes('ON');
+  const start = config['開始日時_自動返信']?.value;
+  const end   = config['解除日時_自動返信']?.value;
+  const inWindow =
+    !!start && now >= new Date(start) && (!end || now <= new Date(end));
+  return on || inWindow;
+};
+
 // ─── ① お客様向けアクション ──────────────────────────────────────────────────
 
 /**
@@ -704,20 +726,65 @@ const sendMessage = async (params) => {
     .find((row) => row.value['メッセージ本文']?.value)
     ?.value['メッセージ本文'].value || '';
 
+  // ── 休業日 自動返信の判定（有効 かつ 直近3時間に未送信なら送信可） ──
+  let shouldAutoReply = false;
+  let autoReplyConfig = null;
+  try {
+    autoReplyConfig = await getAutoReplyConfig();
+    if (isAutoReplyActive(autoReplyConfig)) {
+      const lastSent = rec['最終通知送信日時']?.value;
+      const THREE_HOURS = 3 * 60 * 60 * 1000;
+      if (!lastSent || (Date.now() - new Date(lastSent).getTime()) >= THREE_HOURS) {
+        shouldAutoReply = true;
+      }
+    }
+  } catch (cfgErr) {
+    console.error('[sendMessage] 自動返信設定の取得エラー:', cfgErr.message);
+  }
+
+  const updateFields = {
+    メッセージ履歴: { value: [...existingMessages, newRow] },
+    最終送信者区分: { value: 'お客様' },
+    最新メッセージ: { value: latestMessage },
+  };
+  // 送信可なら同一 PUT で最終通知送信日時を更新し、余分な revision 競合を避ける
+  if (shouldAutoReply) {
+    updateFields['最終通知送信日時'] = { value: nowJST() };
+  }
+
   await axios.put(
     `${KINTONE_BASE}/record.json`,
     {
       app: KINTONE_APP_ID,
       id: recordId,
       revision,
-      record: {
-        メッセージ履歴: { value: [...existingMessages, newRow] },
-        最終送信者区分: { value: 'お客様' },
-        最新メッセージ: { value: latestMessage },
-      },
+      record: updateFields,
     },
     { headers: kintonePostHeaders }
   );
+
+  // ── 休業日 自動返信メール送信（メール失敗はログのみ・お客様レスポンスをブロックしない） ──
+  if (shouldAutoReply) {
+    const autoReplyBody = autoReplyConfig['自動返信メッセージ']?.value || '';
+    if (!autoReplyBody.trim()) {
+      console.warn('[sendMessage] 自動返信メッセージが空のため送信をスキップしました');
+    } else {
+      try {
+        const brandName = rec['ブランド']?.value || 'Bfull FOTS JAPAN';
+        const { mailboxId, mailAccountId } = getRelationMailbox(brandName);
+        await sendRelationMail({
+          mailboxId,
+          mailAccountId,
+          to: rec['お客様メールアドレス'].value,
+          subject: `【${brandName}】お問い合わせを受け付けました`,
+          body: autoReplyBody,
+        });
+        console.log(`[sendMessage] 休業日自動返信を送信しました（recordId: ${recordId}）`);
+      } catch (autoErr) {
+        console.error('[sendMessage] 自動返信メール送信エラー:', String(autoErr));
+      }
+    }
+  }
 
   // App125 の「不具合画像」フィールドに同じファイルを追記
   if (uploadedFileKeys125.length > 0) {
